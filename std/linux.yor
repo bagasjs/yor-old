@@ -1,0 +1,18 @@
+def SYS_write 1  end
+def SYS_exit  60 end
+
+def STDIN  0 end
+def STDOUT 1 end
+def STDERR 2 end
+
+def put
+    STDOUT SYS_write syscall3
+end
+
+def eput
+    STDERR SYS_write syscall3
+end
+
+def exit
+    SYS_exit syscall1
+end

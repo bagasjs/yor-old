@@ -1,0 +1,8 @@
+mem 1 + 10 store
+
+1 while dup 26 <= do
+    mem over 64 + store
+    2 mem 1 1 syscall3
+    1 +
+end
+
