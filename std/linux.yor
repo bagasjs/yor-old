@@ -1,4 +1,20 @@
-def SYS_write 1  end
+def SYS_read    0 end
+def SYS_write   1 end
+def SYS_open    2 end
+def SYS_close   3 end
+def SYS_stat    4 end
+def SYS_fstat   5 end
+def SYS_lstat   6 end
+def SYS_poll    7 end
+def SYS_lseek   8 end
+def SYS_mmap    9 end
+
+def SYS_socket 41 end
+def SYS_accept 43 end
+def SYS_bind   49 end
+def SYS_listen 50 end
+def SYS_execve 59 end
+
 def SYS_exit  60 end
 
 def STDIN  0 end
@@ -6,13 +22,12 @@ def STDOUT 1 end
 def STDERR 2 end
 
 def linux:write // count buf
-    STDOUT 
     SYS_write
-    linux:syscall(3)
+    linux:syscall3
     drop
 end
 
 def linux:exit // exit_code
     SYS_exit
-    linux:syscall(2)
+    linux:syscall2
 end

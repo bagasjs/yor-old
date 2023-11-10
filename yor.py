@@ -34,6 +34,7 @@ class Opcode(Enum):
 
     ADD = auto()
     SUB = auto()
+    DIVMOD = auto()
     EQ = auto() 
     NE = auto()
     GT = auto()
@@ -64,9 +65,6 @@ class Opcode(Enum):
     LINUX_SYSCALL4 = auto()
     LINUX_SYSCALL5 = auto()
     LINUX_SYSCALL6 = auto()
-
-    # Debug
-    DUMP = auto()
 
 Loc = Tuple[str, int, int] # file_path, row, col
 
@@ -169,7 +167,7 @@ def lex_source(source_path: str, source: str) -> List[Token]:
                 compilation_trap((source_path, row + 1, col + 1), "Expecting whitespace after a string")
         else:
             start = i
-            while i < source_len and not source[i].isspace():
+            while i < source_len and not (source[i].isspace()):
                 i, row, col = lex_advance(source, i, row, col)
             symbol = source[start:i]
             result.append(Token((source_path, row + 1, col + 1), symbol, TokenKind.SYMBOL))
@@ -179,6 +177,7 @@ def lex_source(source_path: str, source: str) -> List[Token]:
 map_of_builtin_symbols_and_opkind = {
     "+": Opcode.ADD,
     "-": Opcode.SUB,
+    "divmod": Opcode.DIVMOD,
     "=": Opcode.EQ,
     "!": Opcode.NE,
     "<": Opcode.LT,
@@ -207,21 +206,23 @@ map_of_builtin_symbols_and_opkind = {
     "rot": Opcode.ROT,
     "mem": Opcode.MEM,
 
-    "linux:syscall(0)": Opcode.LINUX_SYSCALL1,
-    "linux:syscall(1)": Opcode.LINUX_SYSCALL1,
-    "linux:syscall(2)": Opcode.LINUX_SYSCALL2,
-    "linux:syscall(3)": Opcode.LINUX_SYSCALL3,
-    "linux:syscall(4)": Opcode.LINUX_SYSCALL4,
-    "linux:syscall(5)": Opcode.LINUX_SYSCALL5,
-    "linux:syscall(6)": Opcode.LINUX_SYSCALL6,
-
-    "dump": Opcode.DUMP,
+    "linux:syscall0": Opcode.LINUX_SYSCALL1,
+    "linux:syscall1": Opcode.LINUX_SYSCALL1,
+    "linux:syscall2": Opcode.LINUX_SYSCALL2,
+    "linux:syscall3": Opcode.LINUX_SYSCALL3,
+    "linux:syscall4": Opcode.LINUX_SYSCALL4,
+    "linux:syscall5": Opcode.LINUX_SYSCALL5,
+    "linux:syscall6": Opcode.LINUX_SYSCALL6,
 }
 
 list_of_linux_only_symbols = [ 
-    "linux:syscall(0)", "linux:syscall(1)", "linux:syscall(2)", 
-    "linux:syscall(3)", "linux:syscall(4)", "linux:syscall(5)",
-    "linux:syscall(6)",
+      "linux:syscall0",
+      "linux:syscall1",
+      "linux:syscall2",
+      "linux:syscall3",
+      "linux:syscall4",
+      "linux:syscall5",
+      "linux:syscall6",
 ]
 
 list_of_debug_only_symbols = [ "dump", ]
@@ -372,39 +373,6 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
     with open(output_path, "w") as out:
         out.write("format ELF64 executable\n")
         out.write("segment readable executable\n")
-        out.write("dump:\n")
-        out.write("    mov     r9, -3689348814741910323\n")
-        out.write("    sub     rsp, 40\n")
-        out.write("    mov     BYTE [rsp+31], 10\n")
-        out.write("    lea     rcx, [rsp+30]\n")
-        out.write(".L2:\n")
-        out.write("    mov     rax, rdi\n")
-        out.write("    lea     r8, [rsp+32]\n")
-        out.write("    mul     r9\n")
-        out.write("    mov     rax, rdi\n")
-        out.write("    sub     r8, rcx\n")
-        out.write("    shr     rdx, 3\n")
-        out.write("    lea     rsi, [rdx+rdx*4]\n")
-        out.write("    add     rsi, rsi\n")
-        out.write("    sub     rax, rsi\n")
-        out.write("    add     eax, 48\n")
-        out.write("    mov     BYTE [rcx], al\n")
-        out.write("    mov     rax, rdi\n")
-        out.write("    mov     rdi, rdx\n")
-        out.write("    mov     rdx, rcx\n")
-        out.write("    sub     rcx, 1\n")
-        out.write("    cmp     rax, 9\n")
-        out.write("    ja      .L2\n")
-        out.write("    lea     rax, [rsp+32]\n")
-        out.write("    mov     edi, 1\n")
-        out.write("    sub     rdx, rax\n")
-        out.write("    xor     eax, eax\n")
-        out.write("    lea     rsi, [rsp+32+rdx]\n")
-        out.write("    mov     rdx, r8\n")
-        out.write("    mov     rax, 1\n")
-        out.write("    syscall\n")
-        out.write("    add     rsp, 40\n")
-        out.write("    ret\n")
         out.write("entry _start\n")
         out.write("_start:\n")
         for ip, op in enumerate(program):
@@ -446,6 +414,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 out.write("    push rax\n")
                 out.write("    push rcx\n")
                 out.write("    push rbx\n")
+
             elif op.kind == Opcode.ADD:
                 out.write("    ;; --- add --- \n")
                 out.write("    pop rbx\n")
@@ -458,6 +427,14 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 out.write("    pop rax\n")
                 out.write("    sub rax, rbx\n")
                 out.write("    push rax\n")
+            elif op.kind == Opcode.DIVMOD:
+                out.write("    ;; --- divmod --- \n")
+                out.write("    xor rdx, rdx\n")
+                out.write("    pop rbx\n")
+                out.write("    pop rax\n")
+                out.write("    div rbx\n")
+                out.write("    push rax\n")
+                out.write("    push rdx\n")
             elif op.kind == Opcode.EQ:
                 out.write("    ;; --- eq --- \n")
                 out.write("    pop rbx\n")
@@ -545,7 +522,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 out.write("    pop rax\n")
                 out.write("    mov [rax], rbx\n")
             elif op.kind == Opcode.LOAD64:
-                out.write("    ;; --- load8 --- \n")
+                out.write("    ;; --- load64 --- \n")
                 out.write("    pop rax\n")
                 out.write("    xor rbx, rbx\n")
                 out.write("    mov rbx, QWORD [rax]\n")
@@ -588,11 +565,6 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 if op.value >= 0:
                     out.write("    jmp addr_%d\n" % op.value)
                 out.write("addr_%d:\n" % ip)
-
-            elif op.kind == Opcode.DUMP:
-                out.write("    ;; --- debug dump --- \n")
-                out.write("    pop rdi\n")
-                out.write("    call dump\n")
 
             else:
                 if YOR_HOST_PLATFORM == "linux":

@@ -1,5 +1,44 @@
 include "std/linux.yor"
 
-def print linux:write end
+def / divmod drop end
+def % divmod swap drop end
 
-def dump_stack end
+def print // buf_sz, buf 
+    STDOUT 
+    linux:write 
+end
+
+def eprint // buf_sz, buf
+    STDERR
+    linux:write
+end
+
+def DUMP_BUF_CAP 32 end
+def ASCII_0 48 end // TODO: support for char
+
+def dump
+    DUMP_BUF_CAP 1 - // buf_offset
+    dup mem + 10 !8 // mem[buf_offset] = '\n'
+
+    // stack: input, buf_offset
+    over 0 > if
+        while over 0 > do
+            1 - // buf_offset -= 1
+
+            over 10 % ASCII_0 +
+            over mem + swap !8
+
+            swap 10 / swap
+        end
+    else
+        1 - 
+        dup mem + // (void*)(mem + buf_offset - 1)
+        ASCII_0
+        !8 // mem[buf_offset]
+    end
+
+    DUMP_BUF_CAP over - // buf_sz
+    swap mem + print
+    drop // input
+end
+

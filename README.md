@@ -7,8 +7,6 @@ But of course with a bit of changes based on my favor.
 argn, ..., arg1, arg0 func-name
 
 ### TODO
-- `include` macro
-- Add string escape
+- Standard Library (working)
 - Add functions
-- Standard Library
 
