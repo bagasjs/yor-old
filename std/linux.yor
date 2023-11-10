@@ -5,16 +5,14 @@ def STDIN  0 end
 def STDOUT 1 end
 def STDERR 2 end
 
-def linux\write
-    STDOUT SYS_write syscall3
+def linux:write // count buf
+    STDOUT 
+    SYS_write
+    linux:syscall(3)
     drop
 end
 
-def linux\write_error
-    STDERR SYS_write syscall3
-    drop
-end
-
-def linux\exit
-    SYS_exit syscall1
+def linux:exit // exit_code
+    SYS_exit
+    linux:syscall(2)
 end

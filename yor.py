@@ -14,7 +14,7 @@ YOR_DEBUG = True
 YOR_MEM_CAPACITY = 640_000
 YOR_HOST_PLATFORM = "void" # "void" | "linux" | "win32"
 YOR_SILENT = False
-YOR_INCLUDE_DIRS = []
+YOR_INCLUDE_DIRS: List[str] = []
 
 if sys.platform == "linux" or sys.platform == "linux2":
     YOR_HOST_PLATFORM = "linux"
@@ -23,68 +23,76 @@ elif sys.platform == "win32":
 else:
     YOR_HOST_PLATFORM = "void"
 
-class OpKind(Enum):
-    OP_PUSH_INT = auto()
-    OP_PUSH_STR = auto()
-    OP_DUP = auto()
-    OP_SWAP = auto()
-    OP_DROP = auto()
-    OP_OVER = auto()
-    OP_ROT = auto()
-    OP_ADD = auto()
-    OP_SUB = auto()
-    OP_EQ = auto() 
-    OP_NE = auto()
-    OP_GT = auto()
-    OP_GE = auto()
-    OP_LT = auto()
-    OP_LE = auto()
+class Opcode(Enum):
+    PUSH_INT = auto()
+    PUSH_STR = auto()
+    DUP = auto()
+    SWAP = auto()
+    DROP = auto()
+    OVER = auto()
+    ROT = auto()
 
-    OP_IF = auto()
-    OP_ELSE = auto()
-    OP_END = auto()
-    OP_WHILE = auto()
-    OP_DO = auto()
+    ADD = auto()
+    SUB = auto()
+    EQ = auto() 
+    NE = auto()
+    GT = auto()
+    GE = auto()
+    LT = auto()
+    LE = auto()
 
-    OP_MEM = auto()
-    OP_LOAD = auto()
-    OP_STORE = auto()
+    BSL = auto()
+    BSR = auto()
+
+    IF = auto()
+    ELSE = auto()
+    END = auto()
+    WHILE = auto()
+    DO = auto()
+
+    MEM = auto()
+    LOAD8 = auto()
+    STORE8 = auto()
+    LOAD64 = auto()
+    STORE64 = auto()
 
     # Linux
-    OP_SYSCALL1 = auto()
-    OP_SYSCALL3 = auto()
+    LINUX_SYSCALL0 = auto()
+    LINUX_SYSCALL1 = auto()
+    LINUX_SYSCALL2 = auto()
+    LINUX_SYSCALL3 = auto()
+    LINUX_SYSCALL4 = auto()
+    LINUX_SYSCALL5 = auto()
+    LINUX_SYSCALL6 = auto()
 
     # Debug
-    OP_DUMP = auto()
+    DUMP = auto()
+
+Loc = Tuple[str, int, int] # file_path, row, col
+
+@dataclass
+class Instruction:
+    kind: Opcode
+    value: Any
+    loc: Loc
 
 class TokenKind(Enum):
-    TOK_SYMBOL = auto()
-    TOK_INT = auto()
-    TOK_STRING = auto()
+    SYMBOL = auto()
+    INT = auto()
+    STRING = auto()
+    NATIVE = auto()
 
 @dataclass
 class Token:
-    loc: Tuple[str, int, int] # file, row, col
+    loc: Loc
     value: str
     kind: TokenKind
-
-@dataclass
-class Loc:
-    file_path: str
-    row: int
-    col: int
-
-@dataclass
-class Op:
-    kind: OpKind
-    value: Any
-    loc: Tuple[str, int, int]
 
 def fatal(*args):
     print(*args, file=sys.stderr)
     sys.exit(1)
 
-def compilation_trap(loc: Tuple[str, int, int], *args: str):
+def compilation_trap(loc: Loc, *args: str):
     print("Compilation error at line %d position %d in file %s:" % (loc[1], loc[2], loc[0]), file=sys.stderr)
     fatal(*args)
 
@@ -143,7 +151,7 @@ def lex_source(source_path: str, source: str) -> List[Token]:
             start = i
             while i < source_len and source[i].isdigit():
                 i, row, col = lex_advance(source, i, row, col)
-            result.append(Token((source_path, row + 1, col + 1), source[start:i], TokenKind.TOK_INT))
+            result.append(Token((source_path, row + 1, col + 1), source[start:i], TokenKind.INT))
             if i < source_len and not source[i].isspace():
                 compilation_trap((source_path, row + 1, col + 1), "Expecting whitespace after a number")
         elif source[i] == '/' and i + 1 < source_len and source[i + 1] == '/':
@@ -155,7 +163,7 @@ def lex_source(source_path: str, source: str) -> List[Token]:
             start = i
             while i < source_len and source[i] != "\"":
                 i, row, col = lex_advance(source, i, row, col)
-            result.append(Token((source_path, row + 1, col + 1), translate_unescaped_str(source[start:i]), TokenKind.TOK_STRING))
+            result.append(Token((source_path, row + 1, col + 1), translate_unescaped_str(source[start:i]), TokenKind.STRING))
             i, row, col = lex_advance(source, i, row, col)
             if i < source_len and not source[i].isspace():
                 compilation_trap((source_path, row + 1, col + 1), "Expecting whitespace after a string")
@@ -163,83 +171,101 @@ def lex_source(source_path: str, source: str) -> List[Token]:
             start = i
             while i < source_len and not source[i].isspace():
                 i, row, col = lex_advance(source, i, row, col)
-            result.append(Token((source_path, row + 1, col + 1), source[start:i], TokenKind.TOK_SYMBOL))
+            symbol = source[start:i]
+            result.append(Token((source_path, row + 1, col + 1), symbol, TokenKind.SYMBOL))
 
     return result
 
 map_of_builtin_symbols_and_opkind = {
-    "+": OpKind.OP_ADD,
-    "-": OpKind.OP_SUB,
-    "=": OpKind.OP_EQ,
-    "!": OpKind.OP_NE,
-    "<": OpKind.OP_LT,
-    "<=": OpKind.OP_LE,
-    ">": OpKind.OP_GT,
-    ">=": OpKind.OP_GE,
+    "+": Opcode.ADD,
+    "-": Opcode.SUB,
+    "=": Opcode.EQ,
+    "!": Opcode.NE,
+    "<": Opcode.LT,
+    "<=": Opcode.LE,
+    ">": Opcode.GT,
+    ">=": Opcode.GE,
 
-    "if": OpKind.OP_IF,
-    "else": OpKind.OP_ELSE,
-    "while": OpKind.OP_WHILE,
-    "do": OpKind.OP_DO,
-    "end": OpKind.OP_END,
+    ">>": Opcode.BSR,
+    "<<": Opcode.BSL,
 
-    "dup": OpKind.OP_DUP,
-    "drop": OpKind.OP_DROP,
-    "over": OpKind.OP_OVER,
-    "swap": OpKind.OP_SWAP,
-    "rot": OpKind.OP_ROT,
-    "mem": OpKind.OP_MEM,
-    "store": OpKind.OP_STORE,
-    "load": OpKind.OP_LOAD,
+    "!8": Opcode.STORE8,
+    "?8": Opcode.LOAD8,
+    "!64": Opcode.STORE64,
+    "?64": Opcode.LOAD64,
 
-    "syscall1": OpKind.OP_SYSCALL1,
-    "syscall3": OpKind.OP_SYSCALL3,
-    "dump": OpKind.OP_DUMP,
+    "if": Opcode.IF,
+    "else": Opcode.ELSE,
+    "while": Opcode.WHILE,
+    "do": Opcode.DO,
+    "end": Opcode.END,
+
+    "dup": Opcode.DUP,
+    "drop": Opcode.DROP,
+    "over": Opcode.OVER,
+    "swap": Opcode.SWAP,
+    "rot": Opcode.ROT,
+    "mem": Opcode.MEM,
+
+    "linux:syscall(0)": Opcode.LINUX_SYSCALL1,
+    "linux:syscall(1)": Opcode.LINUX_SYSCALL1,
+    "linux:syscall(2)": Opcode.LINUX_SYSCALL2,
+    "linux:syscall(3)": Opcode.LINUX_SYSCALL3,
+    "linux:syscall(4)": Opcode.LINUX_SYSCALL4,
+    "linux:syscall(5)": Opcode.LINUX_SYSCALL5,
+    "linux:syscall(6)": Opcode.LINUX_SYSCALL6,
+
+    "dump": Opcode.DUMP,
 }
 
-list_of_linux_only_symbols = [ "syscall1", "syscall2", "syscall3" ]
+list_of_linux_only_symbols = [ 
+    "linux:syscall(0)", "linux:syscall(1)", "linux:syscall(2)", 
+    "linux:syscall(3)", "linux:syscall(4)", "linux:syscall(5)",
+    "linux:syscall(6)",
+]
+
 list_of_debug_only_symbols = [ "dump", ]
 
-def compile_token_to_op(token: Token) -> Op:
-    assert len(OpKind) == 26, "There's unhandled ops in `translate_token()`"
-    if token.kind == TokenKind.TOK_SYMBOL:
+def compile_token_to_op(token: Token) -> Instruction:
+    assert len(Opcode) == 35, "There's unhandled ops in `translate_token()`"
+    if token.kind == TokenKind.SYMBOL:
         if token.value not in map_of_builtin_symbols_and_opkind:
             compilation_trap(token.loc, "Invalid syntax `%s`" % token.value)
         if YOR_HOST_PLATFORM != "linux" and token.value in list_of_linux_only_symbols:
             compilation_trap(token.loc, "Syntax `%s` is not supported on `%s` platform" % (token.value, YOR_HOST_PLATFORM))
-        return Op(map_of_builtin_symbols_and_opkind[token.value], -1, token.loc)
-    if token.kind == TokenKind.TOK_INT:
-        return Op(OpKind.OP_PUSH_INT, int(token.value), token.loc)
-    elif token.kind == TokenKind.TOK_STRING:
-        return Op(OpKind.OP_PUSH_STR, token.value, token.loc)
+        return Instruction(map_of_builtin_symbols_and_opkind[token.value], -1, token.loc)
+    if token.kind == TokenKind.INT:
+        return Instruction(Opcode.PUSH_INT, int(token.value), token.loc)
+    elif token.kind == TokenKind.STRING:
+        return Instruction(Opcode.PUSH_STR, token.value, token.loc)
     else:
         compilation_trap(token.loc, "Unreachable token `%s` with type `%s` in translate_token()" % (token.value, token.kind))
-        return Op(OpKind.OP_PUSH_INT, -1, token.loc)
+        return Instruction(Opcode.PUSH_INT, -1, token.loc)
 
-def compile_tokens_to_program(tokens: List[Token]) -> List[Op]:
+def compile_tokens_to_program(tokens: List[Token]) -> List[Instruction]:
     addresses = []
     program = [compile_token_to_op(token) for token in tokens]
     for ip, op in enumerate(program):
-        assert len(OpKind) == 26, "There's unhandled op in `compile_tokens_to_program()`. Please handle if it creates a block"
-        if op.kind == OpKind.OP_IF:
+        assert len(Opcode) == 35, "There's unhandled op in `compile_tokens_to_program()`. Please handle if it creates a block"
+        if op.kind == Opcode.IF:
             addresses.append(ip)
-        elif op.kind == OpKind.OP_ELSE:
+        elif op.kind == Opcode.ELSE:
             if_ip = addresses.pop()
-            if program[if_ip].kind != OpKind.OP_IF:
+            if program[if_ip].kind != Opcode.IF:
                 compilation_trap(op.loc, "`else` should only be used in `if` blocks")
             program[if_ip].value = ip
             addresses.append(ip)
-        elif op.kind == OpKind.OP_WHILE:
+        elif op.kind == Opcode.WHILE:
             addresses.append(ip)
-        elif op.kind == OpKind.OP_DO:
+        elif op.kind == Opcode.DO:
             while_ip = addresses.pop()
             program[ip].value = while_ip
             addresses.append(ip)
-        elif op.kind == OpKind.OP_END:
+        elif op.kind == Opcode.END:
             block_ip = addresses.pop()
-            if program[block_ip].kind == OpKind.OP_IF or program[block_ip].kind == OpKind.OP_ELSE:
+            if program[block_ip].kind == Opcode.IF or program[block_ip].kind == Opcode.ELSE:
                 program[block_ip].value = ip
-            elif program[block_ip].kind == OpKind.OP_DO:
+            elif program[block_ip].kind == Opcode.DO:
                 if program[block_ip].value < 0:
                     compilation_trap(op.loc, "Invalid usage of `do`")
                 program[ip].value = program[block_ip].value
@@ -248,7 +274,7 @@ def compile_tokens_to_program(tokens: List[Token]) -> List[Op]:
                 compilation_trap(op.loc, "`end` should only be used to close `if`, `do`, or `else` blocks")
     return program
 
-def preprocess_tokens(tokens: List[Token]) -> List[Token]:
+def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[Token]]]:
     macros: Dict[str, List[Token]] = {}
     tokens_without_macro_definition: List[Token] = []
     results: List[Token] = []
@@ -257,7 +283,7 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
     blocks = []
     tokens_amount = len(tokens)
     while i < tokens_amount:
-        if tokens[i].kind == TokenKind.TOK_SYMBOL and tokens[i].value == "def":
+        if tokens[i].kind == TokenKind.SYMBOL and tokens[i].value == "def":
             macro_loc = tokens[i].loc
             macro_name = ""
             i += 1
@@ -276,7 +302,7 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
             blocks.append(macro_name)
             macro_tokens = []
             while i < tokens_amount and len(blocks) > 0:
-                if tokens[i].kind == TokenKind.TOK_SYMBOL:
+                if tokens[i].kind == TokenKind.SYMBOL:
                     if tokens[i].value == "def":
                         compilation_trap(tokens[i].loc, "Illegal behaviour in macro `%s` which is defining macro inside a macro" % macro_name)
                     elif tokens[i].value == macro_name:
@@ -299,14 +325,14 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
             if len(blocks) > 0:
                 compilation_trap(macro_loc, "Macro `%s` should be closed with `end` keyword" % macro_name)
             macros[macro_name] = macro_tokens
-        elif tokens[i].kind == TokenKind.TOK_SYMBOL and tokens[i].value == "include":
+        elif tokens[i].kind == TokenKind.SYMBOL and tokens[i].value == "include":
             include_loc = tokens[i].loc
             i += 1
             if i >= tokens_amount:
                 compilation_trap(include_loc, "Expecting file path after `include` keywords")
             included_path_token = tokens[i]
             i += 1
-            if included_path_token.kind != TokenKind.TOK_STRING:
+            if included_path_token.kind != TokenKind.STRING:
                 compilation_trap(included_path_token.loc, "Expecting a string after `include` keyword found `%s`" % included_path_token.value)
             absolute_include_path = included_path_token.value
             if not os.path.exists(absolute_include_path):
@@ -314,8 +340,9 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
                     check_path = os.path.join(include_dir, included_path_token.value)
                     if os.path.exists(check_path):
                         absolute_include_path = check_path
-            loaded_tokens_from_included_file = lex_file(absolute_include_path)
-            tokens.extend(loaded_tokens_from_included_file)
+            loaded_tokens, loaded_macros = preprocess_tokens(lex_file(absolute_include_path))
+            tokens.extend(loaded_tokens)
+            macros.update(loaded_macros)
             tokens_amount = len(tokens)
         else:
             tokens_without_macro_definition.append(tokens[i])
@@ -323,12 +350,12 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
 
     del tokens
     for token in tokens_without_macro_definition:
-        if token.kind == TokenKind.TOK_SYMBOL and token.value in macros.keys():
+        if token.kind == TokenKind.SYMBOL and token.value in macros.keys():
             results.extend(macros[token.value])
         else:
             results.append(token)
 
-    return results
+    return results, macros
 
 def lex_file(file_path: str) -> List[Token]:
     if not os.path.exists(file_path):
@@ -336,12 +363,12 @@ def lex_file(file_path: str) -> List[Token]:
     with open(file_path, "r") as file:
         return lex_source(file_path, file.read())
 
-def compile_source(file_path: str) -> List[Op]:
-    preprocessed_tokens = preprocess_tokens(lex_file(file_path))
+def compile_source(file_path: str) -> List[Instruction]:
+    preprocessed_tokens, _ = preprocess_tokens(lex_file(file_path))
     return compile_tokens_to_program(preprocessed_tokens)
 
-def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
-    strs = []
+def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
+    strs: List[str] = []
     with open(output_path, "w") as out:
         out.write("format ELF64 executable\n")
         out.write("segment readable executable\n")
@@ -381,37 +408,37 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
         out.write("entry _start\n")
         out.write("_start:\n")
         for ip, op in enumerate(program):
-            assert len(OpKind) == 26, "There's unhandled op in `compile_program()`"
-            if op.kind == OpKind.OP_PUSH_INT:
+            assert len(Opcode) == 35, "There's unhandled op in `compile_program()`"
+            if op.kind == Opcode.PUSH_INT:
                 out.write("    ;; --- push int %d --- \n" % op.value)
                 out.write("    push %d\n" % op.value)
-            elif op.kind == OpKind.OP_PUSH_STR:
+            elif op.kind == Opcode.PUSH_STR:
                 out.write("    ;; --- push str --- \n")
                 out.write("    push %d\n" % len(op.value))
                 out.write("    push str_%d\n" % len(strs))
                 strs.append(op.value)
-            elif op.kind == OpKind.OP_DUP:
+            elif op.kind == Opcode.DUP:
                 out.write("    ;; --- dup --- \n")
                 out.write("    pop rax\n")
                 out.write("    push rax\n")
                 out.write("    push rax\n")
-            elif op.kind == OpKind.OP_OVER:
+            elif op.kind == Opcode.OVER:
                 out.write("    ;; --- over --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
                 out.write("    push rax\n")
                 out.write("    push rbx\n")
                 out.write("    push rax\n")
-            elif op.kind == OpKind.OP_DROP:
+            elif op.kind == Opcode.DROP:
                 out.write("    ;; --- drop --- \n")
                 out.write("    pop rax\n")
-            elif op.kind == OpKind.OP_SWAP:
+            elif op.kind == Opcode.SWAP:
                 out.write("    ;; --- swap --- \n")
                 out.write("    pop rax\n")
                 out.write("    pop rbx\n")
                 out.write("    push rax\n")
                 out.write("    push rbx\n")
-            elif op.kind == OpKind.OP_ROT:
+            elif op.kind == Opcode.ROT:
                 out.write("    ;; --- rotate --- \n")
                 out.write("    pop rcx\n")
                 out.write("    pop rbx\n")
@@ -419,19 +446,19 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    push rax\n")
                 out.write("    push rcx\n")
                 out.write("    push rbx\n")
-            elif op.kind == OpKind.OP_ADD:
+            elif op.kind == Opcode.ADD:
                 out.write("    ;; --- add --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
                 out.write("    add rax, rbx\n")
                 out.write("    push rax\n")
-            elif op.kind == OpKind.OP_SUB:
+            elif op.kind == Opcode.SUB:
                 out.write("    ;; --- sub --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
                 out.write("    sub rax, rbx\n")
                 out.write("    push rax\n")
-            elif op.kind == OpKind.OP_EQ:
+            elif op.kind == Opcode.EQ:
                 out.write("    ;; --- eq --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -440,7 +467,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmove rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_NE:
+            elif op.kind == Opcode.NE:
                 out.write("    ;; --- ne --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -449,7 +476,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmovne rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_GT:
+            elif op.kind == Opcode.GT:
                 out.write("    ;; --- gt --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -458,7 +485,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmovg rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_GE:
+            elif op.kind == Opcode.GE:
                 out.write("    ;; --- ge --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -467,7 +494,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmovge rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_LT:
+            elif op.kind == Opcode.LT:
                 out.write("    ;; --- lt --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -476,7 +503,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmovl rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_LE:
+            elif op.kind == Opcode.LE:
                 out.write("    ;; --- lt --- \n")
                 out.write("    pop rbx\n")
                 out.write("    pop rax\n")
@@ -485,7 +512,46 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    mov rdx, 1\n")
                 out.write("    cmovle rcx, rdx\n")
                 out.write("    push rcx\n")
-            elif op.kind == OpKind.OP_IF:
+            elif op.kind == Opcode.BSL:
+                out.write("    ;; --- bsl --- \n")
+                out.write("    pop rcx\n")
+                out.write("    pop rbx\n")
+                out.write("    shl rbx, cl\n")
+                out.write("    push rbx\n")
+            elif op.kind == Opcode.BSR:
+                out.write("    ;; --- bsr --- \n")
+                out.write("    pop rcx\n")
+                out.write("    pop rbx\n")
+                out.write("    shr rbx, cl\n")
+                out.write("    push rbx\n")
+
+            elif op.kind == Opcode.MEM:
+                out.write("    ;; --- mem --- \n")
+                out.write("    push mem\n")
+            elif op.kind == Opcode.STORE8:
+                out.write("    ;; --- store8 --- \n")
+                out.write("    pop rbx\n")
+                out.write("    pop rax\n")
+                out.write("    mov [rax], bl\n")
+            elif op.kind == Opcode.LOAD8:
+                out.write("    ;; --- load8 --- \n")
+                out.write("    pop rax\n")
+                out.write("    xor rbx, rbx\n")
+                out.write("    mov bl, BYTE [rax]\n")
+                out.write("    push rbx\n")
+            elif op.kind == Opcode.STORE64:
+                out.write("    ;; --- store64 --- \n")
+                out.write("    pop rbx\n")
+                out.write("    pop rax\n")
+                out.write("    mov [rax], rbx\n")
+            elif op.kind == Opcode.LOAD64:
+                out.write("    ;; --- load8 --- \n")
+                out.write("    pop rax\n")
+                out.write("    xor rbx, rbx\n")
+                out.write("    mov rbx, QWORD [rax]\n")
+                out.write("    push rbx\n")
+
+            elif op.kind == Opcode.IF:
                 out.write("    ;; --- if --- \n")
                 out.write("    pop rax\n")
                 out.write("    cmp rax, 1\n")
@@ -495,7 +561,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                         "This might me crossreference issues. Please check the crossreference_program() function" 
                             if YOR_DEBUG else "")
                 out.write("    jne addr_%d\n" % op.value)
-            elif op.kind == OpKind.OP_ELSE:
+            elif op.kind == Opcode.ELSE:
                 out.write("    ;; --- else --- \n")
                 if op.value < 0:
                     compilation_trap(op.loc, 
@@ -504,10 +570,10 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                             if YOR_DEBUG else "")
                 out.write("    jmp addr_%d\n" % op.value)
                 out.write("addr_%d:\n" % ip)
-            elif op.kind == OpKind.OP_WHILE:
+            elif op.kind == Opcode.WHILE:
                 out.write("    ;; --- while --- \n")
                 out.write("addr_%d:\n" % ip)
-            elif op.kind == OpKind.OP_DO:
+            elif op.kind == Opcode.DO:
                 out.write("    ;; --- do --- \n")
                 out.write("    pop rax\n")
                 out.write("    cmp rax, 1\n")
@@ -517,55 +583,85 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                         "This might me crossreference issues. Please check the crossreference_program() function" 
                             if YOR_DEBUG else "")
                 out.write("    jne addr_%d\n" % op.value)
-            elif op.kind == OpKind.OP_END:
+            elif op.kind == Opcode.END:
                 out.write("    ;; --- end --- \n")
                 if op.value >= 0:
                     out.write("    jmp addr_%d\n" % op.value)
                 out.write("addr_%d:\n" % ip)
-            elif op.kind == OpKind.OP_MEM:
-                out.write("    ;; --- mem --- \n")
-                out.write("    push mem\n")
-            elif op.kind == OpKind.OP_STORE:
-                out.write("    ;; --- store --- \n")
-                out.write("    pop rbx\n")
-                out.write("    pop rax\n")
-                out.write("    mov [rax], bl\n")
-            elif op.kind == OpKind.OP_LOAD:
-                out.write("    ;; --- load --- \n")
-                out.write("    pop rax\n")
-                out.write("    xor rbx, rbx\n")
-                out.write("    mov bl, BYTE [rax]\n")
-                out.write("    push rbx\n")
 
-            elif op.kind == OpKind.OP_SYSCALL1:
-                out.write("    ;; --- linux syscall1 --- \n")
-                if YOR_HOST_PLATFORM != "linux":
-                    compilation_trap(op.loc, "Could not do `%s` instruction at `%s` platform" % (op.kind, YOR_HOST_PLATFORM))
-                out.write("    pop rax\n")
-                out.write("    pop rdi\n")
-                out.write("    syscall\n")
-                out.write("    push rax\n")
-            elif op.kind == OpKind.OP_SYSCALL3:
-                out.write("    ;; --- linux syscall3 --- \n")
-                if YOR_HOST_PLATFORM != "linux":
-                    compilation_trap(op.loc, "Could not do `%s` instruction at `%s` platform" % (op.kind, YOR_HOST_PLATFORM))
-                out.write("    pop rax\n")
-                out.write("    pop rdi\n")
-                out.write("    pop rsi\n")
-                out.write("    pop rdx\n")
-                out.write("    syscall\n")
-                out.write("    push rax\n")
-
-            elif op.kind == OpKind.OP_DUMP:
+            elif op.kind == Opcode.DUMP:
                 out.write("    ;; --- debug dump --- \n")
                 out.write("    pop rdi\n")
                 out.write("    call dump\n")
+
             else:
-                compilation_trap(op.loc, "Invalid instruction found.")
+                if YOR_HOST_PLATFORM == "linux":
+                    if op.kind == Opcode.LINUX_SYSCALL0:
+                        out.write("    ;; --- linux syscall 0 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL1:
+                        out.write("    ;; --- linux syscall 1 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL2:
+                        out.write("    ;; --- linux syscall 2 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    pop rsi\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL3:
+                        out.write("    ;; --- linux syscall 3 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    pop rsi\n")
+                        out.write("    pop rdx\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL4:
+                        out.write("    ;; --- linux syscall 4 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    pop rsi\n")
+                        out.write("    pop rdx\n")
+                        out.write("    pop r10\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL5:
+                        out.write("    ;; --- linux syscall 5 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    pop rsi\n")
+                        out.write("    pop rdx\n")
+                        out.write("    pop r10\n")
+                        out.write("    pop r8\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                    elif op.kind == Opcode.LINUX_SYSCALL6:
+                        out.write("    ;; --- linux syscall 5 --- \n")
+                        out.write("    pop rax\n")
+                        out.write("    pop rdi\n")
+                        out.write("    pop rsi\n")
+                        out.write("    pop rdx\n")
+                        out.write("    pop r10\n")
+                        out.write("    pop r8\n")
+                        out.write("    pop r9\n")
+                        out.write("    syscall\n")
+                        out.write("    push rax\n")
+                else:
+                    compilation_trap(op.loc, "Invalid instruction found.")
+
+        out.write("    ;; --- default exit routine in linux ---\n")
         out.write("    mov rax, 60 ;; sys exit\n")
         out.write("    mov rdi, 0\n")
         out.write("    syscall\n")
         out.write("    ret\n")
+
+        out.write(";; --- static data ---\n")
         out.write("segment readable writable\n")
         for i, s in enumerate(strs):
             out.write("str_%d:\n" % i)

@@ -1,3 +1,0 @@
-include "std/basic.yor"
-
-"Hello, World\n" linux\write

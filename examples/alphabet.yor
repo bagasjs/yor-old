@@ -1,8 +1,8 @@
-mem 1 + 10 store
+mem 1 + 10 !8
 
 1 while dup 26 <= do
-    mem over 64 + store
-    2 mem 1 1 syscall3 drop
+    mem over 64 + !8
+    2 mem 1 1 linux:syscall(3) drop
     1 +
 end
 
