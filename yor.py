@@ -13,6 +13,8 @@ YOR_EXTENSION = ".yor"
 YOR_DEBUG = True
 YOR_MEM_CAPACITY = 640_000
 YOR_HOST_PLATFORM = "void" # "void" | "linux" | "win32"
+YOR_SILENT = False
+YOR_INCLUDE_DIRS = []
 
 if sys.platform == "linux" or sys.platform == "linux2":
     YOR_HOST_PLATFORM = "linux"
@@ -266,7 +268,7 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
                 compilation_trap(macro_loc, "Invalid macro definition that immediately find end of source")
 
             if macro_name in map_of_builtin_symbols_and_opkind:
-                compilation_trap(macro_loc, "Redefinition of builtin keyword `%s` as a prerocessing symbols" % macro_name)
+                compilation_trap(macro_loc, "Redefinition of builtin keyword `%s` as a preprocessing symbols" % macro_name)
             if macro_name in macros.keys():
                 compilation_trap(macro_loc, "Redefinition of existing macro `%s`" % macro_name)
             i += 1
@@ -297,9 +299,29 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
             if len(blocks) > 0:
                 compilation_trap(macro_loc, "Macro `%s` should be closed with `end` keyword" % macro_name)
             macros[macro_name] = macro_tokens
+        elif tokens[i].kind == TokenKind.TOK_SYMBOL and tokens[i].value == "include":
+            include_loc = tokens[i].loc
+            i += 1
+            if i >= tokens_amount:
+                compilation_trap(include_loc, "Expecting file path after `include` keywords")
+            included_path_token = tokens[i]
+            i += 1
+            if included_path_token.kind != TokenKind.TOK_STRING:
+                compilation_trap(included_path_token.loc, "Expecting a string after `include` keyword found `%s`" % included_path_token.value)
+            absolute_include_path = included_path_token.value
+            if not os.path.exists(absolute_include_path):
+                for include_dir in YOR_INCLUDE_DIRS:
+                    check_path = os.path.join(include_dir, included_path_token.value)
+                    if os.path.exists(check_path):
+                        absolute_include_path = check_path
+            loaded_tokens_from_included_file = lex_file(absolute_include_path)
+            tokens.extend(loaded_tokens_from_included_file)
+            tokens_amount = len(tokens)
         else:
             tokens_without_macro_definition.append(tokens[i])
             i += 1
+
+    del tokens
     for token in tokens_without_macro_definition:
         if token.kind == TokenKind.TOK_SYMBOL and token.value in macros.keys():
             results.extend(macros[token.value])
@@ -308,8 +330,14 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
 
     return results
 
-def compile_source(file_path: str, source: str) -> List[Op]:
-    preprocessed_tokens = preprocess_tokens(lex_source(file_path, source))
+def lex_file(file_path: str) -> List[Token]:
+    if not os.path.exists(file_path):
+        fatal("Could not open file `%s`" % file_path)
+    with open(file_path, "r") as file:
+        return lex_source(file_path, file.read())
+
+def compile_source(file_path: str) -> List[Op]:
+    preprocessed_tokens = preprocess_tokens(lex_file(file_path))
     return compile_tokens_to_program(preprocessed_tokens)
 
 def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
@@ -516,6 +544,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    pop rax\n")
                 out.write("    pop rdi\n")
                 out.write("    syscall\n")
+                out.write("    push rax\n")
             elif op.kind == OpKind.OP_SYSCALL3:
                 out.write("    ;; --- linux syscall3 --- \n")
                 if YOR_HOST_PLATFORM != "linux":
@@ -525,6 +554,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Op]):
                 out.write("    pop rsi\n")
                 out.write("    pop rdx\n")
                 out.write("    syscall\n")
+                out.write("    push rax\n")
 
             elif op.kind == OpKind.OP_DUMP:
                 out.write("    ;; --- debug dump --- \n")
@@ -549,7 +579,9 @@ def usage():
     print("        -r        Run the program if compilation success")
     print("        -rc       Run the program if compilation success and remove it after execution")
     print("        -asm      Save the generated assembly")
-    print("        -void     Compile program with without supporting any host platform")
+    print("        -I        Add include path")
+    print("        -void     Compile program without supporting any host platform")
+    print("        -silent   Don't show any information from Yor about compilation")
     print("    version                          Get the current version of compiler")
     print("    help                             Get this help messages")
 
@@ -560,11 +592,12 @@ def shift(argv: List[str], error_msg: str) -> Tuple[str, list[str]]:
     return (argv[0], argv[1:],)
 
 def terminal_call(commands: List[str]):
-    print("++ " + " ".join(commands))
+    if not YOR_SILENT:
+        print("++ " + " ".join(commands))
     subprocess.call(commands)
 
 if __name__ == "__main__":
-    YOR_PROGRAM_NAME, argv = shift(sys.argv, "[Unreachable] there's no program name??")
+    YOR_PROGRAM_NAME, argv = shift(sys.argv, "[Unreachable] There's no program name??")
     subcommand, argv = shift(argv, "Please provide a subcommand")
 
     if subcommand == "com":
@@ -575,7 +608,7 @@ if __name__ == "__main__":
         source_path = ""
         output = ""
         while len(argv) > 0:
-            item, argv = shift(argv, "[Unreachable]")
+            item, argv = shift(argv, "[Unreachable] Expecting an item since len(argv) > 0")
             if item == "-r":
                 run_after_compilation = True
             elif item == "-rc":
@@ -583,8 +616,15 @@ if __name__ == "__main__":
                 remove_after_run = True
             elif item == "-asm":
                 save_transpiled_assembly = True
+            elif item == "-silent":
+                YOR_SILENT = True
             elif item == "-void":
                 YOR_HOST_PLATFORM = "void"
+            elif item == "-I":
+                path, argv = shift(argv, "Please provide a value for include flag")
+                if not os.path.exists(path):
+                    fatal("Include path `%s` is not exist" % path)
+                YOR_INCLUDE_DIRS.append(path)
             elif len(source_path) == 0:
                 source_path = item
             elif len(output) == 0:
@@ -596,17 +636,16 @@ if __name__ == "__main__":
         if len(output) == 0:
             output, _ = os.path.splitext(os.path.basename(source_path))
 
-        with open(source_path, "r") as source_file:
-            program = compile_source(source_path, source_file.read())
-            generate_fasm_linux_x86_64(f"{output}.fasm", program)
-            terminal_call(["fasm", f"{output}.fasm", f"{output}"])
+        program = compile_source(source_path)
+        generate_fasm_linux_x86_64(f"{output}.fasm", program)
+        terminal_call(["fasm", f"{output}.fasm", f"{output}"])
 
-            if not save_transpiled_assembly:
-                terminal_call(["rm", f"{output}.fasm"])
-            if run_after_compilation:
-                terminal_call([os.path.abspath(output)])
-                if remove_after_run:
-                    terminal_call(["rm", os.path.abspath(output)])
+        if not save_transpiled_assembly:
+            terminal_call(["rm", f"{output}.fasm"])
+        if run_after_compilation:
+            terminal_call([os.path.abspath(output)])
+            if remove_after_run:
+                terminal_call(["rm", os.path.abspath(output)])
 
     elif subcommand == "version":
         print(YOR_VERSION)

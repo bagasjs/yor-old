@@ -6,6 +6,7 @@ def write
     STDOUT
     SYS_write
     syscall3 
+    drop
 end
 
 def print-alphabets
