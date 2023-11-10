@@ -267,6 +267,8 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
 
             if macro_name in map_of_builtin_symbols_and_opkind:
                 compilation_trap(macro_loc, "Redefinition of builtin keyword `%s` as a prerocessing symbols" % macro_name)
+            if macro_name in macros.keys():
+                compilation_trap(macro_loc, "Redefinition of existing macro `%s`" % macro_name)
             i += 1
             
             blocks.append(macro_name)
@@ -274,9 +276,9 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
             while i < tokens_amount and len(blocks) > 0:
                 if tokens[i].kind == TokenKind.TOK_SYMBOL:
                     if tokens[i].value == "def":
-                        compilation_trap(tokens[i].loc, "Could not define another macro inside a macro")
+                        compilation_trap(tokens[i].loc, "Illegal behaviour in macro `%s` which is defining macro inside a macro" % macro_name)
                     elif tokens[i].value == macro_name:
-                        compilation_trap(tokens[i + 1].loc, "Could not reference macro in itself")
+                        compilation_trap(tokens[i].loc, "Illegal behaviour in macro `%s` which is referencing itself (recursive)" % macro_name)
                     elif tokens[i].value == "end":
                         block = blocks.pop()
                         if block == "while":
@@ -293,7 +295,7 @@ def preprocess_tokens(tokens: List[Token]) -> List[Token]:
                 i += 1
 
             if len(blocks) > 0:
-                compilation_trap(macro_loc, "Macro %s should be closed with `end` keyword" % macro_name)
+                compilation_trap(macro_loc, "Macro `%s` should be closed with `end` keyword" % macro_name)
             macros[macro_name] = macro_tokens
         else:
             tokens_without_macro_definition.append(tokens[i])

@@ -1,6 +1,0 @@
-def SYS_write 1 end
-def STDOUT 1 end
-def write STDOUT SYS_write syscall3 end
-
-"Hello, World" write
-"This is Bagas Jonathan Sitanggang" write

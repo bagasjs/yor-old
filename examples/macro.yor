@@ -1,0 +1,23 @@
+def SYS_write 1 end
+def STDOUT 1 end
+def STDERR 2 end
+
+def write
+    STDOUT
+    SYS_write
+    syscall3 
+end
+
+def print-alphabets
+    1 while dup 26 <= do
+        mem over 64 + store
+        1 mem write
+        1 +
+    end
+end
+
+print-alphabets
+
+mem 10 store
+mem write
+
