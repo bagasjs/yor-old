@@ -23,11 +23,11 @@ def STDERR 2 end
 
 def linux:write // count buf
     SYS_write
-    linux:syscall3
+    linux-syscall-3
     drop
 end
 
 def linux:exit // exit_code
     SYS_exit
-    linux:syscall2
+    linux-syscall-2
 end

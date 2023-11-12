@@ -1,8 +1,10 @@
-mem 1 + 10 !8
+include "basic.yor"
 
+mem 1 + 10 !8
 1 while dup 26 <= do
     mem over 64 + !8
-    2 mem 1 1 linux:syscall3 drop
+    2 mem print
     1 +
 end
 
+drop

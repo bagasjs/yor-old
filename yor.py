@@ -5,7 +5,7 @@ import sys
 import subprocess
 from typing import Any, Dict, Tuple, List
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum, IntEnum, auto
 
 YOR_PROGRAM_NAME= "yor"
 YOR_VERSION = "Yor - 0.0.1"
@@ -15,7 +15,6 @@ YOR_MEM_CAPACITY = 640_000
 YOR_HOST_PLATFORM = "void" # "void" | "linux" | "win32"
 YOR_SILENT = False
 YOR_INCLUDE_DIRS: List[str] = []
-
 if sys.platform == "linux" or sys.platform == "linux2":
     YOR_HOST_PLATFORM = "linux"
 elif sys.platform == "win32":
@@ -23,14 +22,15 @@ elif sys.platform == "win32":
 else:
     YOR_HOST_PLATFORM = "void"
 
+
 class Opcode(Enum):
     PUSH_INT = auto()
     PUSH_STR = auto()
     DUP = auto()
     SWAP = auto()
     DROP = auto()
-    OVER = auto()
     ROT = auto()
+    OVER = auto()
 
     ADD = auto()
     SUB = auto()
@@ -68,17 +68,10 @@ class Opcode(Enum):
 
 Loc = Tuple[str, int, int] # file_path, row, col
 
-@dataclass
-class Instruction:
-    kind: Opcode
-    value: Any
-    loc: Loc
-
 class TokenKind(Enum):
     SYMBOL = auto()
     INT = auto()
     STRING = auto()
-    NATIVE = auto()
 
 @dataclass
 class Token:
@@ -86,13 +79,25 @@ class Token:
     value: str
     kind: TokenKind
 
-def fatal(*args):
-    print(*args, file=sys.stderr)
+@dataclass
+class Operation:
+    kind: Opcode
+    value: Any
+    token: Token
+
+class DataType(IntEnum):
+    INT = auto()
+    PTR = auto()
+    BOOL = auto()
+    LABEL = auto()
+
+def fatal(*args, **kwargs):
+    print(*args, **kwargs, file=sys.stderr)
     sys.exit(1)
 
 def compilation_trap(loc: Loc, *args: str):
-    print("Compilation error at line %d position %d in file %s:" % (loc[1], loc[2], loc[0]), file=sys.stderr)
-    fatal(*args)
+    print("Compilation error at line %d pos %d in `%s`:" % (loc[1], loc[2], loc[0]), file=sys.stderr)
+    fatal(*["    -> %s" %arg for arg in args])
 
 def lex_advance(source: str, i: int, row: int, col: int) -> Tuple[int, int, int]:
     if source[i] == "\n":
@@ -115,6 +120,9 @@ def translate_unescaped_str(s: str) -> str:
                     i += 2
                 elif s[i + 1] == 't':
                     result += '\t'
+                    i += 2
+                elif s[i + 1] == '0':
+                    result += "\x00"
                     i += 2
                 elif s[i + 1] == '\\':
                     result += '\\'
@@ -179,7 +187,7 @@ map_of_builtin_symbols_and_opkind = {
     "-": Opcode.SUB,
     "divmod": Opcode.DIVMOD,
     "=": Opcode.EQ,
-    "!": Opcode.NE,
+    "!=": Opcode.NE,
     "<": Opcode.LT,
     "<=": Opcode.LE,
     ">": Opcode.GT,
@@ -206,44 +214,284 @@ map_of_builtin_symbols_and_opkind = {
     "rot": Opcode.ROT,
     "mem": Opcode.MEM,
 
-    "linux:syscall0": Opcode.LINUX_SYSCALL1,
-    "linux:syscall1": Opcode.LINUX_SYSCALL1,
-    "linux:syscall2": Opcode.LINUX_SYSCALL2,
-    "linux:syscall3": Opcode.LINUX_SYSCALL3,
-    "linux:syscall4": Opcode.LINUX_SYSCALL4,
-    "linux:syscall5": Opcode.LINUX_SYSCALL5,
-    "linux:syscall6": Opcode.LINUX_SYSCALL6,
+    "linux-syscall-0": Opcode.LINUX_SYSCALL1,
+    "linux-syscall-1": Opcode.LINUX_SYSCALL1,
+    "linux-syscall-2": Opcode.LINUX_SYSCALL2,
+    "linux-syscall-3": Opcode.LINUX_SYSCALL3,
+    "linux-syscall-4": Opcode.LINUX_SYSCALL4,
+    "linux-syscall-5": Opcode.LINUX_SYSCALL5,
+    "linux-syscall-6": Opcode.LINUX_SYSCALL6,
 }
 
 list_of_linux_only_symbols = [ 
-      "linux:syscall0",
-      "linux:syscall1",
-      "linux:syscall2",
-      "linux:syscall3",
-      "linux:syscall4",
-      "linux:syscall5",
-      "linux:syscall6",
+      "linux-syscall-0",
+      "linux-syscall-1",
+      "linux-syscall-2",
+      "linux-syscall-3",
+      "linux-syscall-4",
+      "linux-syscall-5",
+      "linux-syscall-6",
 ]
 
-list_of_debug_only_symbols = [ "dump", ]
 
-def compile_token_to_op(token: Token) -> Instruction:
+def compile_token_to_op(token: Token) -> Operation:
     assert len(Opcode) == 35, "There's unhandled ops in `translate_token()`"
     if token.kind == TokenKind.SYMBOL:
         if token.value not in map_of_builtin_symbols_and_opkind:
             compilation_trap(token.loc, "Invalid syntax `%s`" % token.value)
         if YOR_HOST_PLATFORM != "linux" and token.value in list_of_linux_only_symbols:
             compilation_trap(token.loc, "Syntax `%s` is not supported on `%s` platform" % (token.value, YOR_HOST_PLATFORM))
-        return Instruction(map_of_builtin_symbols_and_opkind[token.value], -1, token.loc)
+        return Operation(map_of_builtin_symbols_and_opkind[token.value], -1, token)
     if token.kind == TokenKind.INT:
-        return Instruction(Opcode.PUSH_INT, int(token.value), token.loc)
+        return Operation(Opcode.PUSH_INT, int(token.value), token)
     elif token.kind == TokenKind.STRING:
-        return Instruction(Opcode.PUSH_STR, token.value, token.loc)
+        return Operation(Opcode.PUSH_STR, token.value, token)
     else:
         compilation_trap(token.loc, "Unreachable token `%s` with type `%s` in translate_token()" % (token.value, token.kind))
-        return Instruction(Opcode.PUSH_INT, -1, token.loc)
+        return Operation(Opcode.PUSH_INT, -1, token)
 
-def compile_tokens_to_program(tokens: List[Token]) -> List[Instruction]:
+def data_type_as_str(t: DataType) -> str:
+    if t == DataType.INT:
+        return "int"
+    elif t == DataType.PTR:
+        return "ptr"
+    elif t == DataType.BOOL:
+        return "bool"
+    else:
+        assert False, "Invalid type"
+
+def expect_data_type_stack_size(op: Operation, expected_data_type_stack_size: int, found_data_type_stack_size: int):
+    if expected_data_type_stack_size > found_data_type_stack_size:
+        compilation_trap(op.token.loc, "For `%s` operation expecting %d elements on the stack but found %d elements" % (
+            op.token.value,
+            expected_data_type_stack_size,
+            found_data_type_stack_size,))
+
+def invalid_type_trap(op: Operation, expecting: List[DataType], found: List[DataType]):
+    expecting_str = " ".join([ "<%s>" % data_type_as_str(dt) for dt in expecting])
+    found_str = " ".join([ "<%s>" % data_type_as_str(dt) for dt in found])
+    compilation_trap(op.token.loc, "Expecting `%s %s` but found `%s %s`" % (
+            expecting_str, op.token.value, found_str, op.token.value,
+        ))
+
+def type_check_program(program: List[Operation]):
+    stack: List[Tuple[DataType, Loc]] = []
+
+    for ip in range(len(program)):
+        op = program[ip]
+        assert len(Opcode) == 35, "There's unhandled op in `type_check_program()`. Please handle if it creates a block"
+
+        if op.kind == Opcode.PUSH_INT:
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.PUSH_STR:
+            stack.append((DataType.INT, op.token.loc))
+            stack.append((DataType.PTR, op.token.loc))
+
+        elif op.kind == Opcode.DUP:
+            expect_data_type_stack_size(op, 1, len(stack))
+            a_type, _ = stack.pop()
+            stack.append((a_type, op.token.loc))
+            stack.append((a_type, op.token.loc))
+        elif op.kind == Opcode.SWAP:
+            expect_data_type_stack_size(op, 2, len(stack))
+            a_type, _ = stack.pop()
+            b_type, _ = stack.pop()
+            stack.append((a_type, op.token.loc))
+            stack.append((b_type, op.token.loc))
+        elif op.kind == Opcode.DROP:
+            expect_data_type_stack_size(op, 1, len(stack))
+            stack.pop()
+        elif op.kind == Opcode.OVER:
+            expect_data_type_stack_size(op, 2, len(stack))
+            tmp_type, _ = stack[-2]
+            stack.append((tmp_type, op.token.loc))
+
+        elif op.kind == Opcode.ROT:
+            compilation_trap(op.token.loc, "Not implemented")
+
+        elif op.kind == Opcode.ADD:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if a_type == DataType.INT and b_type == DataType.INT:
+                stack.append((DataType.INT, op.token.loc))
+            elif a_type == DataType.PTR and b_type == DataType.INT:
+                stack.append((DataType.PTR, op.token.loc))
+            elif a_type == DataType.INT and b_type == DataType.PTR:
+                stack.append((DataType.PTR, op.token.loc))
+            else:
+                compilation_trap(op.token.loc, "Expecting `+` operation arguments to be either `int` `int` or `int` `ptr`",
+                                 "but found `%s` `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.SUB:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if a_type == DataType.INT and b_type == DataType.INT:
+                stack.append((DataType.INT, op.token.loc))
+            elif a_type == DataType.PTR and b_type == DataType.INT:
+                stack.append((DataType.PTR, op.token.loc))
+            elif a_type == DataType.INT and b_type == DataType.PTR:
+                stack.append((DataType.PTR, op.token.loc))
+            else:
+                compilation_trap(op.token.loc, "Expecting `-` operation arguments to be either `int` `int` or `int` `ptr`",
+                                 "but found `%s` `%s`" % (a_type, b_type))
+
+        elif op.kind == Opcode.DIVMOD:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if a_type == DataType.INT and b_type == DataType.INT:
+                stack.append((DataType.INT, op.token.loc))
+                stack.append((DataType.INT, op.token.loc))
+            else:
+                invalid_type_trap(op, [DataType.INT, DataType.INT], [a_type, b_type])
+
+        elif op.kind == Opcode.EQ: 
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, _) = stack.pop()
+
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `=` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+
+        elif op.kind == Opcode.NE:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `!=` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.GT:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `>` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.GE:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `>=` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.LT:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `<` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.LE:
+            expect_data_type_stack_size(op, 2, len(stack))
+            (a_type, a_loc) = stack.pop()
+            (b_type, b_loc) = stack.pop()
+            if (a_type == DataType.INT and b_type == DataType.INT) or (a_type == DataType.PTR and b_type == DataType.PTR):
+                stack.append((DataType.BOOL, op.token.loc))
+            else:
+                compilation_trap(a_loc, "Expecting first and second argument of `<=` operation to be the same type either `int` or `ptr`",
+                                 "but found `%s`, `%s`" % (a_type, b_type))
+        elif op.kind == Opcode.BSL:
+            compilation_trap(op.token.loc, "Not implemented")
+        elif op.kind == Opcode.BSR:
+            compilation_trap(op.token.loc, "Not implemented")
+
+        elif op.kind == Opcode.IF:
+            expect_data_type_stack_size(op, 1, len(stack))
+            a_type, a_loc = stack.pop()
+            if a_type != DataType.BOOL:
+                invalid_type_trap(op, [DataType.BOOL], [a_type])
+        elif op.kind == Opcode.ELSE:
+            pass
+        elif op.kind == Opcode.END:
+            pass
+        elif op.kind == Opcode.WHILE:
+            pass
+        elif op.kind == Opcode.DO:
+            expect_data_type_stack_size(op, 1, len(stack))
+            a_type, a_loc = stack.pop()
+            if a_type != DataType.BOOL:
+                compilation_trap(a_loc, "Expecting argument of `do` operation to be `bool` but found %s" % a_type)
+
+        elif op.kind == Opcode.MEM:
+            stack.append((DataType.PTR, op.token.loc))
+        elif op.kind == Opcode.LOAD8:
+            expect_data_type_stack_size(op, 1, len(stack))
+            a_type, a_loc = stack.pop()
+            if a_type != DataType.PTR:
+                invalid_type_trap(op, [DataType.PTR], [a_type])
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.STORE8:
+            expect_data_type_stack_size(op, 2, len(stack))
+            a_type, a_loc = stack.pop()
+            b_type, _ = stack.pop()
+            if a_type == DataType.PTR and b_type == DataType.INT:
+                invalid_type_trap(op, [DataType.PTR, DataType.INT], [a_type, b_type])
+        elif op.kind == Opcode.LOAD64:
+            expect_data_type_stack_size(op, 1, len(stack))
+            a_type, a_loc = stack.pop()
+            if a_type != DataType.PTR:
+                invalid_type_trap(op, [DataType.PTR], [a_type])
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.STORE64:
+            expect_data_type_stack_size(op, 2, len(stack))
+            a_type, a_loc = stack.pop()
+            b_type, _ = stack.pop()
+            if a_type == DataType.PTR and b_type == DataType.INT:
+                invalid_type_trap(op, [DataType.PTR, DataType.INT], [a_type, b_type])
+
+        elif op.kind == Opcode.LINUX_SYSCALL0:
+            expect_data_type_stack_size(op, 1, len(stack))
+            stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL1:
+            expect_data_type_stack_size(op, 2, len(stack))
+            stack.pop()
+            stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL2:
+            expect_data_type_stack_size(op, 3, len(stack))
+            for _ in range(3):
+                stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL3:
+            expect_data_type_stack_size(op, 4, len(stack))
+            for _ in range(4):
+                stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL4:
+            expect_data_type_stack_size(op, 5, len(stack))
+            for _ in range(5):
+                stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL5:
+            expect_data_type_stack_size(op, 6, len(stack))
+            for _ in range(6):
+                stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        elif op.kind == Opcode.LINUX_SYSCALL6:
+            expect_data_type_stack_size(op, 7, len(stack))
+            for _ in range(7):
+                stack.pop()
+            stack.append((DataType.INT, op.token.loc))
+        else:
+            compilation_trap(op.token.loc, "Invalid operation")
+
+    if len(stack) > 0:
+        compilation_trap(stack.pop()[1], "There's %d unhandled data in the stack" % (len(stack) + 1))
+
+def compile_tokens_to_program(tokens: List[Token]) -> List[Operation]:
     addresses = []
     program = [compile_token_to_op(token) for token in tokens]
     for ip, op in enumerate(program):
@@ -253,7 +501,7 @@ def compile_tokens_to_program(tokens: List[Token]) -> List[Instruction]:
         elif op.kind == Opcode.ELSE:
             if_ip = addresses.pop()
             if program[if_ip].kind != Opcode.IF:
-                compilation_trap(op.loc, "`else` should only be used in `if` blocks")
+                compilation_trap(op.token.loc, "`else` should only be used in `if` blocks")
             program[if_ip].value = ip
             addresses.append(ip)
         elif op.kind == Opcode.WHILE:
@@ -268,11 +516,11 @@ def compile_tokens_to_program(tokens: List[Token]) -> List[Instruction]:
                 program[block_ip].value = ip
             elif program[block_ip].kind == Opcode.DO:
                 if program[block_ip].value < 0:
-                    compilation_trap(op.loc, "Invalid usage of `do`")
+                    compilation_trap(op.token.loc, "Invalid usage of `do`")
                 program[ip].value = program[block_ip].value
                 program[block_ip].value = ip
             else:
-                compilation_trap(op.loc, "`end` should only be used to close `if`, `do`, or `else` blocks")
+                compilation_trap(op.token.loc, "`end` should only be used to close `if`, `do`, or `else` blocks")
     return program
 
 def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[Token]]]:
@@ -345,6 +593,12 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
             tokens.extend(loaded_tokens)
             macros.update(loaded_macros)
             tokens_amount = len(tokens)
+        elif tokens[i].kind == TokenKind.SYMBOL and tokens[i].value == "memory":
+            if (tokens[i + 1].kind == TokenKind.SYMBOL and 
+                tokens[i + 2].kind == TokenKind.INT and
+                tokens[i + 3].kind == TokenKind.SYMBOL and tokens[i + 3].value == "end"):
+                pass
+            i += 4
         else:
             tokens_without_macro_definition.append(tokens[i])
             i += 1
@@ -364,11 +618,11 @@ def lex_file(file_path: str) -> List[Token]:
     with open(file_path, "r") as file:
         return lex_source(file_path, file.read())
 
-def compile_source(file_path: str) -> List[Instruction]:
+def compile_source(file_path: str) -> List[Operation]:
     preprocessed_tokens, _ = preprocess_tokens(lex_file(file_path))
     return compile_tokens_to_program(preprocessed_tokens)
 
-def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
+def generate_fasm_linux_x86_64(output_path: str, program: List[Operation]):
     strs: List[str] = []
     with open(output_path, "w") as out:
         out.write("format ELF64 executable\n")
@@ -376,7 +630,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
         out.write("entry _start\n")
         out.write("_start:\n")
         for ip, op in enumerate(program):
-            assert len(Opcode) == 35, "There's unhandled op in `compile_program()`"
+            assert len(Opcode) == 35, "There's unhandled op in `generate_fasm_linux_x86_64()`"
             if op.kind == Opcode.PUSH_INT:
                 out.write("    ;; --- push int %d --- \n" % op.value)
                 out.write("    push %d\n" % op.value)
@@ -533,7 +787,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 out.write("    pop rax\n")
                 out.write("    cmp rax, 1\n")
                 if op.value < 0:
-                    compilation_trap(op.loc, 
+                    compilation_trap(op.token.loc, 
                         "`if` instruction has no reference to the end of its block."
                         "This might me crossreference issues. Please check the crossreference_program() function" 
                             if YOR_DEBUG else "")
@@ -541,7 +795,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
             elif op.kind == Opcode.ELSE:
                 out.write("    ;; --- else --- \n")
                 if op.value < 0:
-                    compilation_trap(op.loc, 
+                    compilation_trap(op.token.loc, 
                         "`else` instruction has no reference to the end of its block."
                         "This might me crossreference issues. Please check the crossreference_program() function" 
                             if YOR_DEBUG else "")
@@ -555,7 +809,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                 out.write("    pop rax\n")
                 out.write("    cmp rax, 1\n")
                 if op.value < 0:
-                    compilation_trap(op.loc, 
+                    compilation_trap(op.token.loc, 
                         "`do` instruction has no reference to the end of its block."
                         "This might me crossreference issues. Please check the crossreference_program() function" 
                             if YOR_DEBUG else "")
@@ -625,7 +879,7 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
                         out.write("    syscall\n")
                         out.write("    push rax\n")
                 else:
-                    compilation_trap(op.loc, "Invalid instruction found.")
+                    compilation_trap(op.token.loc, "Invalid instruction found.")
 
         out.write("    ;; --- default exit routine in linux ---\n")
         out.write("    mov rax, 60 ;; sys exit\n")
@@ -643,15 +897,16 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Instruction]):
 def usage():
     print("USAGE: %s SUBCOMMANDS <ARGS> [FLAGS]" % YOR_PROGRAM_NAME)
     print("SUBCOMMANDS:")
-    print("    com <file> <output?> [FLAGS]     Compile program into platform binary. `output` is optional")
-    print("        -r        Run the program if compilation success")
-    print("        -rc       Run the program if compilation success and remove it after execution")
-    print("        -asm      Save the generated assembly")
-    print("        -I        Add include path")
-    print("        -void     Compile program without supporting any host platform")
-    print("        -silent   Don't show any information from Yor about compilation")
     print("    version                          Get the current version of compiler")
     print("    help                             Get this help messages")
+    print("    com <file> <output?> [FLAGS]     Compile program into platform binary. `output` is optional")
+    print("        -I           Add include path")
+    print("        -no-check    Do type checking")
+    print("        -asm         Save the generated assembly")
+    print("        -void        Compile program without supporting any host platform")
+    print("        -r           Run the program if compilation success")
+    print("        -rc          Run the program if compilation success and remove it after execution")
+    print("        -s           Don't show any information from Yor about compilation")
 
 def shift(argv: List[str], error_msg: str) -> Tuple[str, list[str]]:
     if len(argv) < 1:
@@ -672,6 +927,7 @@ if __name__ == "__main__":
         run_after_compilation = False
         save_transpiled_assembly = False
         remove_after_run = False
+        do_type_checking = True
 
         source_path = ""
         output = ""
@@ -679,12 +935,14 @@ if __name__ == "__main__":
             item, argv = shift(argv, "[Unreachable] Expecting an item since len(argv) > 0")
             if item == "-r":
                 run_after_compilation = True
+            elif item == "-no-check":
+                do_type_checking = True
             elif item == "-rc":
                 run_after_compilation = True
                 remove_after_run = True
             elif item == "-asm":
                 save_transpiled_assembly = True
-            elif item == "-silent":
+            elif item == "-s":
                 YOR_SILENT = True
             elif item == "-void":
                 YOR_HOST_PLATFORM = "void"
@@ -705,6 +963,8 @@ if __name__ == "__main__":
             output, _ = os.path.splitext(os.path.basename(source_path))
 
         program = compile_source(source_path)
+        if do_type_checking:
+            type_check_program(program)
         generate_fasm_linux_x86_64(f"{output}.fasm", program)
         terminal_call(["fasm", f"{output}.fasm", f"{output}"])
 

@@ -1,0 +1,19 @@
+include "basic.yor"
+
+0 dump
+1 dump
+
+0 1 while dup 100 <= do
+    // 55 89
+    swap // 89 55
+    over // 89 55 89
+    over // 89 55 89 55
+    +  // 89 55 144
+    swap // 89 144 55
+    drop // 89 144
+    dup 100 < if
+        dup dump
+    end
+end
+
+drop drop

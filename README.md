@@ -9,4 +9,4 @@ argn, ..., arg1, arg0 func-name
 ### TODO
 - Standard Library (working)
 - Add functions
-
+- Fix error messages in type checking

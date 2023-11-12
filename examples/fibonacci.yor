@@ -1,6 +1,0 @@
-1 while dup 100 <= do
-    mem over over ?64 + !64
-    1 +
-end
-
-mem ?64 dump

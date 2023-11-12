@@ -1,3 +1,4 @@
 include "basic.yor"
 
+// This is a comment in Yor
 "Hello, World\n" print
