@@ -1,1 +1,2 @@
 *.exe
+env.sh # export YOR_INCLUDE_DIRS="$YOR_INCLUDE_DIRS:/Path/To/Yor/Include/Dir"

@@ -5,12 +5,16 @@ def % divmod swap drop end
 
 def print // buf_sz, buf 
     STDOUT 
-    linux:write 
+    linux-write 
 end
 
 def eprint // buf_sz, buf
     STDERR
-    linux:write
+    linux-write
+end
+
+def exit
+    linux-exit
 end
 
 def DUMP_BUF_CAP 32 end
