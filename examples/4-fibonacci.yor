@@ -11,9 +11,11 @@ include "basic.yor"
     +  // 89 55 144
     swap // 89 144 55
     drop // 89 144
-    dup 100 < if
+
+    if dup 100 < do
         dup dump
     end
+
 end
 
 drop drop

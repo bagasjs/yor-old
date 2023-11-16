@@ -62,6 +62,8 @@ class Opcode(Enum):
     WHILE = auto()
     DO = auto()
     INTRINSIC = auto()
+    MEMORY_DEF = auto()
+    MEMORY_REFER = auto()
 
 Loc = Tuple[str, int, int] # file_path, row, col
 
@@ -70,17 +72,21 @@ class TokenKind(Enum):
     INT = auto()
     STRING = auto()
 
+    # This should be actually an expression rather than a token
+    MEMORY_DEF = auto()
+    MEMORY_REFER = auto()
+
 @dataclass
 class Token:
     loc: Loc
-    value: str
+    value: str|Tuple[str, int]
     kind: TokenKind
 
 @dataclass
 class Operation:
     kind: Opcode
     token: Token
-    operand: int|str|Intrinsic
+    operand: int|str|Intrinsic|Tuple[str, int]
 
 class DataType(IntEnum):
     INT = auto()
@@ -222,6 +228,8 @@ MAP_OF_KEYWORD_SYMBOLS_AND_OPKINDS = {
     "end": Opcode.END,
 }
 
+LIST_OF_KEYWORDS = [ "if", "else", "while", "do", "end", "memory", "def" ]
+
 LIST_OF_LINUX_ONLY_SYMBOLS = [ 
       "linux-syscall-0",
       "linux-syscall-1",
@@ -233,9 +241,10 @@ LIST_OF_LINUX_ONLY_SYMBOLS = [
 ]
 
 def compile_token_to_op(token: Token) -> Operation:
-    assert len(Opcode) == 8, "There's unhandled ops in `translate_token()`"
+    assert len(Opcode) == 10, "There's unhandled ops in `translate_token()`"
     assert len(Intrinsic) == 28, "There's unhandled intrinsic in `translate_token()`"
     if token.kind == TokenKind.SYMBOL:
+        assert isinstance(token.value, str), "Invalid type of token.value in compile_token_to_op()"
         if token.value in MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS.keys():
             if YOR_HOST_PLATFORM != "linux" and token.value in LIST_OF_LINUX_ONLY_SYMBOLS:
                 compilation_trap(token.loc, "Syntax `%s` is not supported on `%s` platform" % (token.value, YOR_HOST_PLATFORM))
@@ -245,9 +254,21 @@ def compile_token_to_op(token: Token) -> Operation:
         else:
             compilation_trap(token.loc, "Invalid syntax `%s`" % token.value)
     if token.kind == TokenKind.INT:
+        assert isinstance(token.value, str), "Invalid type of token.value in compile_token_to_op()"
         return Operation(Opcode.PUSH_INT, token, int(token.value))
     elif token.kind == TokenKind.STRING:
+        assert isinstance(token.value, str), "Invalid type of token.value in compile_token_to_op()"
         return Operation(Opcode.PUSH_STR, token, token.value)
+    elif token.kind == TokenKind.MEMORY_DEF:
+        assert isinstance(token.value, tuple), "Invalid type of token.value in compile_token_to_op()"
+        if token.value[0] in LIST_OF_KEYWORDS or token.value[0] in MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS:
+            compilation_trap(token.loc, "Could not redefine this `%s` symbol as a memory label" % token.value[0])
+        if not (token.value[0].isalnum() or '_' in token.value[0]):
+            compilation_trap(token.loc, "Illegal name for memory definition only supporting alphabet, numeric and '_' characters")
+        return Operation(Opcode.MEMORY_DEF, token, token.value)
+    elif token.kind == TokenKind.MEMORY_REFER:
+        assert isinstance(token.value, str), "Invalid type of token.value in compile_token_to_op()"
+        return Operation(Opcode.MEMORY_REFER, token, token.value)
     else:
         compilation_trap(token.loc, "Unreachable token `%s` with type `%s` in translate_token()" % (token.value, token.kind))
         return Operation(Opcode.PUSH_INT, token, -1)
@@ -281,7 +302,7 @@ def type_check_program(program: List[Operation]):
 
     for ip in range(len(program)):
         op = program[ip]
-        assert len(Opcode) == 8, "There's unhandled ops in `translate_token()`"
+        assert len(Opcode) == 10, "There's unhandled ops in `translate_token()`"
         assert len(Intrinsic) == 28, "There's unhandled intrinsic in `translate_token()`"
 
         if op.kind == Opcode.PUSH_INT:
@@ -289,6 +310,10 @@ def type_check_program(program: List[Operation]):
         elif op.kind == Opcode.PUSH_STR:
             stack.append((DataType.INT, op.token.loc))
             stack.append((DataType.PTR, op.token.loc))
+        elif op.kind == Opcode.MEMORY_REFER:
+            stack.append((DataType.PTR, op.token.loc))
+        elif op.kind == Opcode.MEMORY_DEF:
+            pass
         elif op.kind == Opcode.IF:
             pass
         elif op.kind == Opcode.ELSE:
@@ -492,7 +517,7 @@ def compile_tokens_to_program(tokens: List[Token]) -> List[Operation]:
     addresses = []
     program = [compile_token_to_op(token) for token in tokens]
     for ip, op in enumerate(program):
-        assert len(Opcode) == 8, "There's unhandled ops in `compile_tokens_to_program()`"
+        assert len(Opcode) == 10, "There's unhandled ops in `compile_tokens_to_program()`"
         if op.kind == Opcode.IF:
             addresses.append(ip)
         elif op.kind == Opcode.WHILE:
@@ -530,6 +555,7 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
     macros: Dict[str, List[Token]] = {}
     tokens_without_macro_definition: List[Token] = []
     results: List[Token] = []
+    memories: List[str] = []
 
     i = 0
     blocks = []
@@ -541,11 +567,13 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
             i += 1
 
             if i < tokens_amount:
-                macro_name = tokens[i].value
+                token_i_value = tokens[i].value
+                assert isinstance(token_i_value, str), "Invalid token value for macro"
+                macro_name = token_i_value
             else:
                 compilation_trap(macro_loc, "Invalid macro definition that immediately find end of source")
 
-            if macro_name in MAP_OF_KEYWORD_SYMBOLS_AND_OPKINDS.keys() or macro_name in MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS.keys() or macro_name == "def":
+            if macro_name in MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS.keys() or macro_name in LIST_OF_KEYWORDS:
                 compilation_trap(macro_loc, "Redefinition of builtin keyword `%s` as a preprocessing symbols" % macro_name)
             if macro_name in macros.keys():
                 compilation_trap(macro_loc, "Redefinition of existing macro `%s`" % macro_name)
@@ -566,8 +594,13 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
                     elif tokens[i].value == "if" or tokens[i].value == "while":
                         blocks.append("while")
                         macro_tokens.append(tokens[i])
+                    elif tokens[i].value in memories:
+                        assert isinstance(tokens[i].value, str), "Invalid token value for macro"
+                        macro_tokens.append(Token(kind=TokenKind.MEMORY_REFER, loc=tokens[i].loc, value=tokens[i].value))
                     elif tokens[i].value in macros.keys():
-                        macro_tokens.extend(macros[tokens[i].value])
+                        token_i_value = tokens[i].value
+                        assert isinstance(token_i_value, str), "Invalid token value for macro"
+                        macro_tokens.extend(macros[token_i_value])
                     else:
                         macro_tokens.append(tokens[i])
                 else:
@@ -587,20 +620,48 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
             if included_path_token.kind != TokenKind.STRING:
                 compilation_trap(included_path_token.loc, "Expecting a string after `include` keyword found `%s`" % included_path_token.value)
             absolute_include_path = included_path_token.value
+            assert isinstance(absolute_include_path, str), "Invalid token value for macro"
             if not os.path.exists(absolute_include_path):
                 for include_dir in YOR_INCLUDE_DIRS:
-                    check_path = os.path.join(include_dir, included_path_token.value)
+                    check_path = os.path.join(include_dir, absolute_include_path)
                     if os.path.exists(check_path):
                         absolute_include_path = check_path
+                        break
             loaded_tokens, loaded_macros = preprocess_tokens(lex_file(absolute_include_path))
             tokens.extend(loaded_tokens)
             macros.update(loaded_macros)
             tokens_amount = len(tokens)
         elif tokens[i].kind == TokenKind.SYMBOL and tokens[i].value == "memory":
-            if (tokens[i + 1].kind == TokenKind.SYMBOL and 
-                tokens[i + 2].kind == TokenKind.INT and
-                tokens[i + 3].kind == TokenKind.SYMBOL and tokens[i + 3].value == "end"):
-                pass
+            if i + 3 >= len(tokens):
+                compilation_trap(tokens[i].loc, "Expecting name, size and the `end` keyword after the `memory` keyword")
+            if tokens[i + 1].kind != TokenKind.SYMBOL:
+                compilation_trap(tokens[i + 1].loc, "Expecting token symbol as the label for `memory` found %s" % tokens[i + 1].kind)
+            name = tokens[i + 1].value
+            assert isinstance(name, str), "Please check preprocess_tokens(). This error should not be happened"
+            
+            # TODO: Check if it's a symbol token and it's in the macro listings
+            size = 0
+            val = tokens[i + 2].value
+            assert isinstance(val, str), "Please check preprocess_tokens(). This error should not be happened"
+            if tokens[i + 2].kind == TokenKind.INT:
+                size = int(val)
+            elif tokens[i + 2].kind == TokenKind.SYMBOL:
+                if val not in macros.keys():
+                    compilation_trap(tokens[i + 2].loc, "This `%s` macro is not defined" % val)
+                if len(macros[val]) != 1 and macros[val][0].kind == TokenKind.INT:
+                    compilation_trap(tokens[i + 2].loc, "Expecting macro `%s` is a integer token" % val)
+                val = macros[val][0].value
+                assert isinstance(val, str), "Please check preprocess_tokens(). This error should not be happened"
+                size = int(val)
+            else:
+                compilation_trap(tokens[i + 2].loc, "Expecting token `int` or `symbol` as the size for `memory` found %s" % tokens[i + 2].kind)
+
+            if not (tokens[i + 3].kind == TokenKind.SYMBOL and tokens[i + 3].value == "end"):
+                compilation_trap(tokens[i + 3].loc, "Expecting `end` keyword to close `memory` declaration found %s" % tokens[i + 3].kind)
+
+            memories.append(name)
+            memory_token = Token(kind=TokenKind.MEMORY_DEF, loc=tokens[i].loc, value=(name, size))
+            tokens_without_macro_definition.append(memory_token)
             i += 4
         else:
             tokens_without_macro_definition.append(tokens[i])
@@ -609,7 +670,11 @@ def preprocess_tokens(tokens: List[Token]) -> Tuple[List[Token], Dict[str, List[
     del tokens
     for token in tokens_without_macro_definition:
         if token.kind == TokenKind.SYMBOL and token.value in macros.keys():
+            assert isinstance(token.value, str), "Please check preprocess_tokens(). THis error should not be happened"
             results.extend(macros[token.value])
+        elif token.kind == TokenKind.SYMBOL and token.value in memories:
+            assert isinstance(token.value, str), "Please check preprocess_tokens(). THis error should not be happened"
+            results.append(Token(kind=TokenKind.MEMORY_REFER, loc=token.loc, value=token.value))
         else:
             results.append(token)
 
@@ -627,13 +692,14 @@ def compile_source(file_path: str) -> List[Operation]:
 
 def generate_fasm_linux_x86_64(output_path: str, program: List[Operation]):
     strs: List[str] = []
+    memories: Dict[str, int] = {}
     with open(output_path, "w") as out:
         out.write("format ELF64 executable\n")
         out.write("segment readable executable\n")
         out.write("entry _start\n")
         out.write("_start:\n")
         for ip, op in enumerate(program):
-            assert len(Opcode) == 8, "There's unhandled ops in `generate_fasm_linux_x86_64()`"
+            assert len(Opcode) == 10, "There's unhandled ops in `generate_fasm_linux_x86_64()`"
             assert len(Intrinsic) == 28, "There's unhandled intrinsic in `generate_fasm_linux_x86_64()`"
             if op.kind == Opcode.PUSH_INT:
                 assert isinstance(op.operand, int), "Invalid operand for PUSH_INT operation. There's something wrong at source parsing"
@@ -646,6 +712,19 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Operation]):
                 out.write("    push %d\n" % len(value))
                 out.write("    push str_%d\n" % len(strs))
                 strs.append(value)
+            elif op.kind == Opcode.MEMORY_REFER:
+                out.write("    ;; --- memory refer --- \n")
+                assert isinstance(op.operand, str), "Invalid operand for MEMORY_REFER operation. There's something wrong at source parsing"
+                if op.operand not in memories.keys():
+                    compilation_trap(op.token.loc, "Memory with name %s is not exists" % op.operand)
+                out.write("    push memory_%s\n" % op.operand)
+            elif op.kind == Opcode.MEMORY_DEF:
+                out.write("    ;; --- memory def --- \n")
+                assert isinstance(op.operand, tuple), "Invalid operand for MEMORY operation. There's something wrong at source parsing"
+                name, size = op.operand
+                if name in memories.keys():
+                    compilation_trap(op.token.loc, "Memory with name %s is already defined" % name)
+                memories[name] = size
             elif op.kind == Opcode.IF:
                 out.write("    ;; --- if --- \n")
             elif op.kind == Opcode.ELSE:
@@ -894,6 +973,9 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Operation]):
         for i, s in enumerate(strs):
             out.write("str_%d:\n" % i)
             out.write("db %s\n" % ",".join(map(hex, list(bytes(s, "utf-8")))))
+        for name, size in memories.items():
+            out.write("memory_%s:\n" % name)
+            out.write("rb %d\n" % size)
         out.write("mem: rb %d\n" % YOR_MEM_CAPACITY)
 
 def usage():

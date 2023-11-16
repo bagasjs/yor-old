@@ -25,7 +25,7 @@ def dump
     dup mem + 10 !8 // mem[buf_offset] = '\n'
 
     // stack: input, buf_offset
-    over 0 > if
+    if over 0 > do
         while over 0 > do
             1 - // buf_offset -= 1
 

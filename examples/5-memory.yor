@@ -1,0 +1,7 @@
+include "basic.yor"
+
+def sizeof(something) 100 end
+memory something sizeof(something) end
+
+something 0 + 10 !8
+something ?8 dump
