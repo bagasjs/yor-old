@@ -3,8 +3,14 @@ include "basic.yor"
 20 // my age
 21 // permitted age for drinking alcohol
 
->= if
+if over over >= do
     "You are permitted to drink\n" print
 else
     "You are not permitted to drink\n" print
 end
+
+if 1 1 = do
+    "This is an else-less if-statement\n" print
+end
+
+drop drop

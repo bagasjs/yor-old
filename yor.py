@@ -222,7 +222,7 @@ MAP_OF_KEYWORD_SYMBOLS_AND_OPKINDS = {
     "end": Opcode.END,
 }
 
-list_of_linux_only_symbols = [ 
+LIST_OF_LINUX_ONLY_SYMBOLS = [ 
       "linux-syscall-0",
       "linux-syscall-1",
       "linux-syscall-2",
@@ -237,7 +237,7 @@ def compile_token_to_op(token: Token) -> Operation:
     assert len(Intrinsic) == 28, "There's unhandled intrinsic in `translate_token()`"
     if token.kind == TokenKind.SYMBOL:
         if token.value in MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS.keys():
-            if YOR_HOST_PLATFORM != "linux" and token.value in list_of_linux_only_symbols:
+            if YOR_HOST_PLATFORM != "linux" and token.value in LIST_OF_LINUX_ONLY_SYMBOLS:
                 compilation_trap(token.loc, "Syntax `%s` is not supported on `%s` platform" % (token.value, YOR_HOST_PLATFORM))
             return Operation(Opcode.INTRINSIC, token, MAP_OF_INTRINSIC_SYMBOLS_AND_INSTRINSICS[token.value])
         elif token.value in MAP_OF_KEYWORD_SYMBOLS_AND_OPKINDS.keys():
@@ -290,10 +290,7 @@ def type_check_program(program: List[Operation]):
             stack.append((DataType.INT, op.token.loc))
             stack.append((DataType.PTR, op.token.loc))
         elif op.kind == Opcode.IF:
-            expect_data_type_stack_size(op, 1, len(stack))
-            a_type, a_loc = stack.pop()
-            if a_type != DataType.BOOL:
-                invalid_type_trap(op, [DataType.BOOL], [a_type])
+            pass
         elif op.kind == Opcode.ELSE:
             pass
         elif op.kind == Opcode.END:
@@ -498,27 +495,33 @@ def compile_tokens_to_program(tokens: List[Token]) -> List[Operation]:
         assert len(Opcode) == 8, "There's unhandled ops in `compile_tokens_to_program()`"
         if op.kind == Opcode.IF:
             addresses.append(ip)
-        elif op.kind == Opcode.ELSE:
-            if_ip = addresses.pop()
-            if program[if_ip].kind != Opcode.IF:
-                compilation_trap(op.token.loc, "`else` should only be used in `if` blocks")
-            program[if_ip].operand = ip
-            addresses.append(ip)
         elif op.kind == Opcode.WHILE:
             addresses.append(ip)
+        elif op.kind == Opcode.ELSE:
+            ifdo_ip = addresses.pop()
+            if program[ifdo_ip].kind != Opcode.DO:
+                compilation_trap(op.token.loc, "`else` should only be used in `if <cond> do` blocks")
+            program[ifdo_ip].operand = ip
+            addresses.append(ip)
         elif op.kind == Opcode.DO:
-            while_ip = addresses.pop()
-            program[ip].operand = while_ip
+            block_ip = addresses.pop()
+            program[ip].operand = block_ip
             addresses.append(ip)
         elif op.kind == Opcode.END:
             block_ip = addresses.pop()
-            if program[block_ip].kind == Opcode.IF or program[block_ip].kind == Opcode.ELSE:
+            if program[block_ip].kind == Opcode.ELSE:
                 program[block_ip].operand = ip
             elif program[block_ip].kind == Opcode.DO:
                 if program[block_ip].operand < 0:
-                    compilation_trap(op.token.loc, "Invalid usage of `do`")
-                program[ip].operand = program[block_ip].operand
-                program[block_ip].operand = ip
+                    compilation_trap(op.token.loc, "Invalid usage of `do` for while loop")
+                refered_op = program[program[block_ip].operand]
+                if refered_op.kind == Opcode.WHILE:
+                    program[ip].operand = program[block_ip].operand
+                    program[block_ip].operand = ip
+                elif refered_op.kind == Opcode.IF:
+                    program[block_ip].operand = ip
+                else:
+                    compilation_trap(op.token.loc, "Invalid usage of `end` for do block %s" % program[block_ip].kind)
             else:
                 compilation_trap(op.token.loc, "`end` should only be used to close `if`, `do`, or `else` blocks")
     return program
@@ -645,15 +648,6 @@ def generate_fasm_linux_x86_64(output_path: str, program: List[Operation]):
                 strs.append(value)
             elif op.kind == Opcode.IF:
                 out.write("    ;; --- if --- \n")
-                out.write("    pop rax\n")
-                out.write("    cmp rax, 1\n")
-                assert isinstance(op.operand, int), "Invalid operand for IF operation. There's something wrong at source parsing"
-                if op.operand < 0:
-                    compilation_trap(op.token.loc, 
-                        "`if` instruction has no reference to the end of its block."
-                        "This might me crossreference issues. Please check the compile_token_to_op() function" 
-                            if YOR_DEBUG else "")
-                out.write("    jne addr_%d\n" % op.operand)
             elif op.kind == Opcode.ELSE:
                 out.write("    ;; --- else --- \n")
                 assert isinstance(op.operand, int), "Invalid operand for ELSE operation. There's something wrong at source parsing"
